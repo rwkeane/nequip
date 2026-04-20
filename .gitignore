@@ -16,6 +16,7 @@ benchmark_data/
 # test data
 aspirin_data/
 fcu.xyz
+data/rmd17/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
