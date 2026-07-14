@@ -1,6 +1,6 @@
 # This file is a part of the `nequip` package. Please see LICENSE and README at the root for information on using it.
 from ._base_datamodule import NequIPDataModule
-from nequip.utils import download_url, extract_zip, extract_tar
+from nequip.utils import download_url
 from nequip.utils.logger import RankedLogger
 from nequip.data import AtomicDataDict
 
@@ -53,7 +53,20 @@ class rMD17DataModule(NequIPDataModule):
         "toluene": "rmd17_toluene.npz",
         "uracil": "rmd17_uracil.npz",
     }
-    DATASET_URL = "https://archive.materialscloud.org/records/pfffs-fff86/files/rmd17.tar.bz2?download=1"
+    # Individual NPZ download URLs from the Figshare API:
+    # https://api.figshare.com/v2/articles/12672038/files
+    DATASET_URL_MAP = {
+        "aspirin": "https://ndownloader.figshare.com/files/62265757",
+        "azobenzene": "https://ndownloader.figshare.com/files/62265754",
+        "benzene": "https://ndownloader.figshare.com/files/62265739",
+        "ethanol": "https://ndownloader.figshare.com/files/62265733",
+        "malonaldehyde": "https://ndownloader.figshare.com/files/62265736",
+        "naphthalene": "https://ndownloader.figshare.com/files/62265751",
+        "paracetamol": "https://ndownloader.figshare.com/files/62265760",
+        "salicylic": "https://ndownloader.figshare.com/files/62265763",
+        "toluene": "https://ndownloader.figshare.com/files/62265742",
+        "uracil": "https://ndownloader.figshare.com/files/62265745",
+    }
 
     def __init__(
         self,
@@ -69,6 +82,7 @@ class rMD17DataModule(NequIPDataModule):
             f"`dataset={dataset}` not supported, `dataset` can be any of {list(self.DATASET_MAP.keys())}"
         )
 
+        self._dataset_url = self.DATASET_URL_MAP[dataset]
         file_path = "/".join(
             [data_source_dir, "rmd17/npz_data", self.DATASET_MAP[dataset]]
         )
@@ -113,16 +127,16 @@ class rMD17DataModule(NequIPDataModule):
 
     def prepare_data(self):
         """"""
-        if not (os.path.isfile(self.file_path)):
-            logger.info(f"Downloading data files to `{self.data_source_dir}`")
-            # download and unzip
-            download_path = download_url(self.DATASET_URL, self.data_source_dir)
-            extract_zip(download_path, self.data_source_dir)
-            extract_tar(
-                path=self.data_source_dir + "/rmd17.tar.bz2",
-                folder=self.data_source_dir,
-                mode="r:bz2",
+        if not os.path.isfile(self.file_path):
+            logger.info(
+                f"Downloading `{self.dataset}` data file to `{self.data_source_dir}`"
             )
-
+            npz_dir = os.path.join(self.data_source_dir, "rmd17", "npz_data")
+            os.makedirs(npz_dir, exist_ok=True)
+            download_url(
+                self._dataset_url,
+                npz_dir,
+                filename=self.DATASET_MAP[self.dataset],
+            )
         else:
             logger.info(f"Using existing data files `{self.file_path}`")

@@ -10,6 +10,7 @@ from .wandb_watch import WandbWatch
 from .tf32_scheduler import TF32Scheduler
 from .training_stats import TrainingStatsMonitor
 from .gpu_memory_monitor import GPUMemoryMonitor
+from .cuda_timing_monitor import CUDATimingMonitor
 
 __all__ = [
     SoftAdapt,
@@ -21,4 +22,5 @@ __all__ = [
     WandbWatch,
     TrainingStatsMonitor,
     GPUMemoryMonitor,
+    CUDATimingMonitor,
 ]

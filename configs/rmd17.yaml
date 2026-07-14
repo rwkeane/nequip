@@ -109,6 +109,9 @@ trainer:
 
     - _target_: nequip.train.callbacks.GPUMemoryMonitor
 
+    - _target_: nequip.train.callbacks.CUDATimingMonitor
+      output_path: ${hydra:runtime.output_dir}/timing.json
+
 
 # =====================
 #    TRAINING MODULE
@@ -175,6 +178,9 @@ training_module:
 
       radial_mlp_depth: 3
       radial_mlp_width: 64
+
+      readout_mlp_hidden_layers_depth: 1
+      readout_mlp_hidden_layers_width: 16
 
       avg_num_neighbors: ${training_data_stats:num_neighbors_mean}
       per_type_energy_scales: ${training_data_stats:per_type_forces_rms}

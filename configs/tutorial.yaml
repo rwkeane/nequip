@@ -141,6 +141,9 @@ trainer:
     - _target_: lightning.pytorch.callbacks.LearningRateMonitor
       logging_interval: epoch
 
+    - _target_: nequip.train.callbacks.CUDATimingMonitor
+      output_path: ${hydra:runtime.output_dir}/timing.json
+
 
 # =====================
 #    TRAINING MODULE

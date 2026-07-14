@@ -103,6 +103,21 @@ def main(config: DictConfig) -> None:
 
     # === instantiate Lightning.Trainer ===
     trainer_cfg = OmegaConf.to_container(config.trainer, resolve=True)
+    callbacks = trainer_cfg.get("callbacks") or []
+    has_timing_callback = any(
+        isinstance(callback, dict)
+        and callback.get("_target_") == "nequip.train.callbacks.CUDATimingMonitor"
+        for callback in callbacks
+    )
+    if not has_timing_callback:
+        output_dir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
+        callbacks.append(
+            {
+                "_target_": "nequip.train.callbacks.CUDATimingMonitor",
+                "output_path": os.path.join(output_dir, "timing.json"),
+            }
+        )
+        trainer_cfg["callbacks"] = callbacks
     # enforce inference_mode=False to enable grad during inference
     # see https://lightning.ai/docs/pytorch/stable/common/trainer.html#inference-mode
     if "inference_mode" in trainer_cfg:
