@@ -38,9 +38,9 @@ class CUDATimingMonitor(Callback):
         self.output_path = output_path
         self.enabled = enabled and torch.cuda.is_available()
         self._records: list[dict[str, Any]] = []
-        self._current: dict[str, Any] = {}
         self._train_start: Optional[torch.cuda.Event] = None
         self._val_start: Optional[torch.cuda.Event] = None
+        self._train_active = False
 
     def setup(self, trainer: "lightning.Trainer", pl_module: lightning.LightningModule, stage: str):
         if self.enabled:
@@ -88,16 +88,12 @@ class CUDATimingMonitor(Callback):
 
         if phase == "train":
             gpu_ms = self._train_start.elapsed_time(end)
-            self._current["train"] = {
-                "gpu_ms": gpu_ms,
-                "num_batches": self._batch_count(trainer, "num_training_batches"),
-            }
+            num_batches = self._batch_count(trainer, "num_training_batches")
         else:
             gpu_ms = self._val_start.elapsed_time(end)
-            self._current["val"] = {
-                "gpu_ms": gpu_ms,
-                "num_batches": self._batch_count(trainer, "num_val_batches"),
-            }
+            num_batches = self._batch_count(trainer, "num_val_batches")
+
+        self._store_timing(trainer.current_epoch, phase, gpu_ms, num_batches)
 
         trainer.lightning_module.log(
             f"time/{phase}_epoch_gpu_ms",
@@ -113,19 +109,32 @@ class CUDATimingMonitor(Callback):
             flush=True,
         )
 
-    def _validation_runs_this_epoch(self, trainer: "lightning.Trainer") -> bool:
-        check_val = trainer.check_val_every_n_epoch
-        if check_val is None or check_val == 0:
-            return False
-        return (trainer.current_epoch + 1) % check_val == 0
+    def _get_epoch_record(self, epoch: int) -> dict[str, Any]:
+        for record in self._records:
+            if record["epoch"] == epoch:
+                return record
+        record: dict[str, Any] = {"epoch": epoch}
+        self._records.append(record)
+        return record
 
-    def _finalize_epoch_record(self, trainer: "lightning.Trainer") -> None:
-        if not self._current:
-            return
-        self._records.append(self._current.copy())
-        self._current = {}
+    def _store_timing(
+        self, epoch: int, phase: str, gpu_ms: float, num_batches: int
+    ) -> None:
+        self._get_epoch_record(epoch)[phase] = {
+            "gpu_ms": gpu_ms,
+            "num_batches": num_batches,
+        }
+
+    def _write_if_global_zero(self, trainer: "lightning.Trainer") -> None:
         if trainer.is_global_zero:
             self._write_json(trainer)
+
+    def _finish_train(self, trainer: "lightning.Trainer") -> None:
+        if not self._train_active:
+            return
+        self._record_end(trainer, "train")
+        self._train_active = False
+        self._write_if_global_zero(trainer)
 
     def _compute_summary(self) -> dict[str, float | int]:
         return {
@@ -156,28 +165,29 @@ class CUDATimingMonitor(Callback):
     def on_train_epoch_start(self, trainer, pl_module):
         if not self.enabled:
             return
-        self._current = {"epoch": trainer.current_epoch}
         self._record_start("train")
+        self._train_active = True
 
     def on_train_epoch_end(self, trainer, pl_module):
         if not self.enabled:
             return
-        self._record_end(trainer, "train")
-        if not self._validation_runs_this_epoch(trainer):
-            self._finalize_epoch_record(trainer)
+        # Lightning calls this after validation, so this is only a fallback for
+        # epochs where validation did not run.
+        self._finish_train(trainer)
 
     def on_validation_epoch_start(self, trainer, pl_module):
-        if not self.enabled:
+        if not self.enabled or trainer.sanity_checking:
             return
-        if "epoch" not in self._current:
-            self._current = {"epoch": trainer.current_epoch}
+        # Lightning runs validation before on_train_epoch_end. End the training
+        # interval here so validation GPU work is not counted as training.
+        self._finish_train(trainer)
         self._record_start("val")
 
     def on_validation_epoch_end(self, trainer, pl_module):
-        if not self.enabled:
+        if not self.enabled or trainer.sanity_checking:
             return
         self._record_end(trainer, "val")
-        self._finalize_epoch_record(trainer)
+        self._write_if_global_zero(trainer)
 
     def on_fit_end(self, trainer, pl_module):
         if not self.enabled:
