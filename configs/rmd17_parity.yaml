@@ -1,12 +1,15 @@
 # yamllint disable rule:line-length
-# Config file for training NequIP on the revised MD17 (rMD17) dataset.
-# rMD17 reference: https://figshare.com/articles/dataset/Revised_MD17_dataset_rMD17_/12672038
-# The dataset will be automatically downloaded to `data_source_dir` if not already present.
+# A/B-parity variant of rmd17.yaml (equicloud tools/abparity/nequip).
+# Identical to rmd17.yaml except `run: [train]`: parity runs must not spend
+# hours evaluating the 99,000-frame held-out test split at the end of every
+# training run.  Situational settings (max_epochs, seeds, model_dtype,
+# accelerator, output dir) are passed as hydra CLI overrides by the parity
+# scripts so this file stays a minimal delta from the reference config.
 
 # ===========
 #     RUN
 # ===========
-run: [train, test]
+run: [train]
 
 
 # ===========
