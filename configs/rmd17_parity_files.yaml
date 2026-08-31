@@ -1,0 +1,203 @@
+# yamllint disable rule:line-length
+# A/B-parity variant of rmd17_parity.yaml with EXPLICIT dataset files.
+#
+# Instead of deriving the 950/50 train/val split from `seed: 456` at runtime
+# (which trusts RNG reproducibility across machines/versions), this config
+# takes the train and validation sets as explicit ASE-readable files:
+#
+#   train_file=/abs/path/parity_train.xyz val_file=/abs/path/parity_val.xyz
+#
+# Both are MANDATORY hydra overrides (no defaults): a run cannot silently
+# fall back to a derived split.  Produce the files with equicloud's
+# tools/abparity/nequip/export_dump_frames.py, which exports the stage-A
+# dump's exact frames as extended XYZ in eV.  The text is still lossless:
+# every float is written as its shortest round-tripping decimal (Python
+# repr), and the exporter verifies the files read back bit-for-bit.
+#
+# ASEDataModule performs NO splitting here: the train dataset is exactly the
+# train file's frames (in order), and likewise for val.  Everything outside
+# the `data:` section is identical to rmd17_parity.yaml; situational settings
+# (max_epochs, seeds, model_dtype, accelerator, output dir) remain hydra CLI
+# overrides supplied by the parity scripts.
+
+# ===========
+#     RUN
+# ===========
+run: [train]
+
+
+# ===========
+#  VARIABLES
+# ===========
+cutoff_radius: 4.0
+
+num_layers: 5
+l_max: 3
+num_features: 64
+
+# Kept for the logger name so run directories keep the rmd17_<molecule>
+# layout the parity tooling globs for.
+rmd17_molecule: aspirin
+
+# Explicit dataset files (REQUIRED overrides).
+train_file: ???
+val_file: ???
+
+# rMD17 molecules are organic molecules containing only C, H, and O.
+model_type_names: [C, H, O]
+chemical_species: ${model_type_names}
+
+monitored_metric: val0_epoch/weighted_sum
+
+
+# ============
+#     DATA
+# ============
+data:
+  _target_: nequip.data.datamodule.ASEDataModule
+  seed: 456
+
+  # Explicit file-backed datasets; no split is performed.  Frames are
+  # already in eV (exported post-conversion), so unlike rMD17DataModule no
+  # kcal/mol -> eV transform is applied here.
+  train_file_path: ${train_file}
+  val_file_path: ${val_file}
+
+  transforms:
+    - _target_: nequip.data.transforms.ChemicalSpeciesToAtomTypeMapper
+      model_type_names: ${model_type_names}
+    - _target_: nequip.data.transforms.NeighborListTransform
+      r_max: ${cutoff_radius}
+
+  train_dataloader:
+    _target_: torch.utils.data.DataLoader
+    batch_size: 5
+    num_workers: 4
+    shuffle: true
+  val_dataloader:
+    _target_: torch.utils.data.DataLoader
+    batch_size: 5
+    num_workers: ${data.train_dataloader.num_workers}
+  test_dataloader: ${data.val_dataloader}
+
+  stats_manager:
+    _target_: nequip.data.CommonDataStatisticsManager
+    dataloader_kwargs:
+      batch_size: 5
+    type_names: ${model_type_names}
+
+
+# =============
+#    TRAINER
+# =============
+trainer:
+  _target_: lightning.Trainer
+  accelerator: gpu
+  enable_checkpointing: true
+  max_epochs: 1000000
+  max_time: 03:00:00:00
+  log_every_n_steps: 1
+
+  logger:
+    _target_: lightning.pytorch.loggers.CSVLogger
+    save_dir: ${hydra:runtime.output_dir}
+    name: rmd17_${rmd17_molecule}
+
+  callbacks:
+    - _target_: lightning.pytorch.callbacks.EarlyStopping
+      monitor: ${monitored_metric}
+      # NOTE (equicloud parity): min_delta 0 -- the equicloud harness has no
+      # min_delta concept in its early-stopping/plateau logic.
+      min_delta: 0
+      patience: 1000
+
+    - _target_: lightning.pytorch.callbacks.ModelCheckpoint
+      monitor: ${monitored_metric}
+      dirpath: ${hydra:runtime.output_dir}
+      filename: best
+      save_last: true
+
+    - _target_: lightning.pytorch.callbacks.LearningRateMonitor
+      logging_interval: epoch
+
+    - _target_: nequip.train.callbacks.GPUMemoryMonitor
+
+    - _target_: nequip.train.callbacks.CUDATimingMonitor
+      output_path: ${hydra:runtime.output_dir}/timing.json
+
+
+# =====================
+#    TRAINING MODULE
+# =====================
+training_module:
+  _target_: nequip.train.EMALightningModule
+  ema_decay: 0.99
+
+  loss:
+    _target_: nequip.train.EnergyForceLoss
+    per_atom_energy: true
+    coeffs:
+      total_energy: 1.0
+      forces: 1000.0
+
+  # NOTE (equicloud parity): use MSE-based metrics identical to the loss so
+  # that `val0_epoch/weighted_sum` (the monitored metric for the LR scheduler,
+  # checkpointing, and early stopping) is the same quantity as the equicloud
+  # harness's validation loss (up to the constant coefficient normalization).
+  val_metrics:
+    _target_: nequip.train.EnergyForceLoss
+    per_atom_energy: true
+    coeffs:
+      total_energy: 1.0
+      forces: 1000.0
+  train_metrics: ${training_module.val_metrics}
+  test_metrics: ${training_module.val_metrics}
+
+  optimizer:
+    _target_: torch.optim.Adam
+    lr: 0.01
+    amsgrad: true
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+    weight_decay: 0
+
+  lr_scheduler:
+    scheduler:
+      _target_: torch.optim.lr_scheduler.ReduceLROnPlateau
+      factor: 0.8
+      patience: 50
+      threshold: 0.2
+      min_lr: 1e-6
+    monitor: ${monitored_metric}
+    interval: epoch
+    frequency: 1
+
+  model:
+    _target_: nequip.model.NequIPGNNModel
+    compile_mode: compile
+
+    seed: 456
+    model_dtype: float32
+    type_names: ${model_type_names}
+    r_max: ${cutoff_radius}
+
+    num_bessels: 8
+    bessel_trainable: true
+    polynomial_cutoff_p: 6
+
+    num_layers: ${num_layers}
+    l_max: ${l_max}
+    parity: true
+    num_features: ${num_features}
+
+    radial_mlp_depth: 3
+    radial_mlp_width: 64
+
+    readout_mlp_hidden_layers_depth: 1
+    readout_mlp_hidden_layers_width: 16
+
+    avg_num_neighbors: ${training_data_stats:num_neighbors_mean}
+    per_type_energy_scales: ${training_data_stats:per_type_forces_rms}
+    per_type_energy_shifts: ${training_data_stats:per_atom_energy_mean}
+    per_type_energy_scales_trainable: true
+    per_type_energy_shifts_trainable: true
